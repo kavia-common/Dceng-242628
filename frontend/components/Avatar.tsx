@@ -10,10 +10,11 @@ interface AvatarProps {
     facialFeature: string;
   };
   animations: any[];
+  confirmedPatterns?: any[];
   name: string;
 }
 
-const Avatar: React.FC<AvatarProps> = ({ config, animations, name }) => {
+const Avatar: React.FC<AvatarProps> = ({ config, animations, confirmedPatterns = [], name }) => {
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
@@ -252,7 +253,20 @@ const Avatar: React.FC<AvatarProps> = ({ config, animations, name }) => {
     >
       {renderAvatar()}
       
-      {/* Pattern indicators below avatar */}
+      {/* Confirmed patterns - semi-permanent indicators */}
+      {confirmedPatterns.length > 0 && (
+        <View style={styles.confirmedContainer}>
+          {confirmedPatterns.slice(-3).map((pattern, idx) => (
+            <View key={idx} style={styles.confirmedBadge}>
+              <Text style={styles.confirmedText}>
+                {pattern.type.replace(/_/g, ' ').substring(0, 12)}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+      
+      {/* Pattern indicators below avatar - temporary flash */}
       {animations.length > 0 && (
         <View style={styles.indicatorContainer}>
           {animations.map((anim, idx) => (
@@ -287,6 +301,25 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#f07178',
     fontWeight: '600',
+    textTransform: 'capitalize',
+  },
+  confirmedContainer: {
+    marginTop: 12,
+    alignItems: 'center',
+    gap: 4,
+  },
+  confirmedBadge: {
+    backgroundColor: '#64ffda30',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#64ffda',
+  },
+  confirmedText: {
+    fontSize: 9,
+    color: '#64ffda',
+    fontWeight: '700',
     textTransform: 'capitalize',
   },
 });

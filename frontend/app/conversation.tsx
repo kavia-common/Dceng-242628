@@ -19,6 +19,7 @@ import axios from 'axios';
 import Constants from 'expo-constants';
 import Avatar from '../components/Avatar';
 import DefenseMechanismAnimation from '../components/DefenseMechanismAnimation';
+import PendingTacticsArea from '../components/PendingTacticsArea';
 import { Ionicons } from '@expo/vector-icons';
 
 const BACKEND_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || process.env.EXPO_PUBLIC_BACKEND_URL;
@@ -35,9 +36,13 @@ export default function ConversationScreen() {
   const [currentSpeaker, setCurrentSpeaker] = useState<'user' | 'other'>('user');
   const [userAnimations, setUserAnimations] = useState<any[]>([]);
   const [otherAnimations, setOtherAnimations] = useState<any[]>([]);
+  const [userConfirmedPatterns, setUserConfirmedPatterns] = useState<any[]>([]);
+  const [otherConfirmedPatterns, setOtherConfirmedPatterns] = useState<any[]>([]);
+  const [pendingPatterns, setPendingPatterns] = useState<any[]>([]);
   const [textInput, setTextInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [inputMode, setInputMode] = useState<'voice' | 'text'>('voice');
+  const [messagesSinceLastEval, setMessagesSinceLastEval] = useState(0);
   
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -150,9 +155,11 @@ export default function ConversationScreen() {
       });
 
       const patterns = analyzeResponse.data.patterns || [];
+      const messageId = analyzeResponse.data.messageId;
 
       // Add message to local state
       const newMessage = {
+        _id: messageId,
         speaker: currentSpeaker,
         text,
         timestamp: new Date().toISOString(),
@@ -161,19 +168,46 @@ export default function ConversationScreen() {
 
       setMessages(prev => [...prev, newMessage]);
 
-      // Trigger animations for detected patterns
-      if (patterns.length > 0) {
+      // Separate tentative and confirmed patterns
+      const tentativePatterns = patterns.filter((p: any) => p.status === 'tentative');
+      const confirmedPatterns = patterns.filter((p: any) => p.status === 'confirmed');
+
+      // Add tentative patterns to pending area
+      if (tentativePatterns.length > 0) {
+        const pendingItems = tentativePatterns.map((p: any) => ({
+          ...p,
+          speaker: currentSpeaker,
+          messageId,
+        }));
+        setPendingPatterns(prev => [...prev, ...pendingItems]);
+      }
+
+      // Add confirmed patterns to avatar animations
+      if (confirmedPatterns.length > 0) {
         if (currentSpeaker === 'user') {
-          setUserAnimations(prev => [...prev, ...patterns]);
+          setUserConfirmedPatterns(prev => [...prev, ...confirmedPatterns]);
+          // Temporary flash animation
+          setUserAnimations(prev => [...prev, ...confirmedPatterns]);
           setTimeout(() => {
-            setUserAnimations(prev => prev.slice(patterns.length));
-          }, 3000);
+            setUserAnimations(prev => prev.slice(confirmedPatterns.length));
+          }, 2000);
         } else {
-          setOtherAnimations(prev => [...prev, ...patterns]);
+          setOtherConfirmedPatterns(prev => [...prev, ...confirmedPatterns]);
+          // Temporary flash animation
+          setOtherAnimations(prev => [...prev, ...confirmedPatterns]);
           setTimeout(() => {
-            setOtherAnimations(prev => prev.slice(patterns.length));
-          }, 3000);
+            setOtherAnimations(prev => prev.slice(confirmedPatterns.length));
+          }, 2000);
         }
+      }
+
+      // Increment message counter for re-evaluation
+      const newCount = messagesSinceLastEval + 1;
+      setMessagesSinceLastEval(newCount);
+
+      // Auto re-evaluate after 3 messages
+      if (newCount >= 3 && pendingPatterns.length > 0) {
+        setTimeout(() => reevaluatePendingPatterns(), 1000);
       }
 
       // Scroll to bottom
@@ -185,6 +219,79 @@ export default function ConversationScreen() {
       console.error('Error analyzing message:', error);
       throw error;
     }
+  };
+
+  const reevaluatePendingPatterns = async () => {
+    if (pendingPatterns.length === 0) return;
+
+    try {
+      // Get conversation context
+      const conversationContext = messages.map(msg => ({
+        speaker: msg.speaker,
+        text: msg.text,
+      }));
+
+      // Group pending patterns by message
+      const patternsByMessage = pendingPatterns.reduce((acc: any, pattern: any) => {
+        if (!acc[pattern.messageId]) {
+          acc[pattern.messageId] = [];
+        }
+        acc[pattern.messageId].push(pattern);
+        return acc;
+      }, {});
+
+      // Re-evaluate each message's patterns
+      for (const messageId of Object.keys(patternsByMessage)) {
+        const response = await axios.post(`${BACKEND_URL}/api/reevaluate`, {
+          sessionId,
+          messageId,
+          conversationContext,
+        });
+
+        const updates = response.data.updates || [];
+
+        // Process each update
+        updates.forEach((update: any) => {
+          const pattern = pendingPatterns.find(p => p.id === update.patternId);
+          if (!pattern) return;
+
+          if (update.decision === 'confirmed') {
+            // Move to confirmed patterns on avatar
+            const confirmedPattern = { ...pattern, status: 'confirmed' };
+            
+            if (pattern.speaker === 'user') {
+              setUserConfirmedPatterns(prev => [...prev, confirmedPattern]);
+            } else {
+              setOtherConfirmedPatterns(prev => [...prev, confirmedPattern]);
+            }
+
+            // Remove from pending
+            setPendingPatterns(prev => prev.filter(p => p.id !== update.patternId));
+            
+          } else if (update.decision === 'exonerated') {
+            // Trigger exoneration animation
+            setPendingPatterns(prev =>
+              prev.map(p =>
+                p.id === update.patternId
+                  ? { ...p, status: 'exonerating' }
+                  : p
+              )
+            );
+          }
+        });
+      }
+
+      // Reset counter
+      setMessagesSinceLastEval(0);
+
+    } catch (error) {
+      console.error('Error re-evaluating patterns:', error);
+    }
+  };
+
+  const handlePatternExonerated = (patternId: string) => {
+    // Remove exonerated pattern from pending
+    setPendingPatterns(prev => prev.filter(p => p.id !== patternId));
   };
 
   const handleTextSubmit = async () => {
@@ -239,6 +346,7 @@ export default function ConversationScreen() {
           <Avatar
             config={session.userAvatar}
             animations={userAnimations}
+            confirmedPatterns={userConfirmedPatterns}
             name={session.userName}
           />
           <Text style={styles.avatarName}>{session.userName}</Text>
@@ -252,11 +360,20 @@ export default function ConversationScreen() {
           <Avatar
             config={session.otherAvatar}
             animations={otherAnimations}
+            confirmedPatterns={otherConfirmedPatterns}
             name={session.otherName}
           />
           <Text style={styles.avatarName}>{session.otherName}</Text>
         </View>
       </View>
+
+      {/* Pending Tactics Area */}
+      {pendingPatterns.length > 0 && (
+        <PendingTacticsArea
+          patterns={pendingPatterns}
+          onExonerated={handlePatternExonerated}
+        />
+      )}
 
       {/* Messages */}
       <ScrollView
