@@ -348,6 +348,8 @@ export default function ConversationScreen() {
             animations={userAnimations}
             confirmedPatterns={userConfirmedPatterns}
             name={session.userName}
+            sessionId={sessionId as string}
+            speaker="user"
           />
           <Text style={styles.avatarName}>{session.userName}</Text>
         </View>
@@ -362,6 +364,8 @@ export default function ConversationScreen() {
             animations={otherAnimations}
             confirmedPatterns={otherConfirmedPatterns}
             name={session.otherName}
+            sessionId={sessionId as string}
+            speaker="other"
           />
           <Text style={styles.avatarName}>{session.otherName}</Text>
         </View>
@@ -371,6 +375,8 @@ export default function ConversationScreen() {
       {pendingPatterns.length > 0 && (
         <PendingTacticsArea
           patterns={pendingPatterns}
+          userColor="#64ffda"
+          otherColor="#f07178"
           onExonerated={handlePatternExonerated}
         />
       )}

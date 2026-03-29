@@ -10,10 +10,17 @@ interface PendingPattern {
 
 interface PendingTacticsAreaProps {
   patterns: PendingPattern[];
+  userColor?: string;
+  otherColor?: string;
   onExonerated?: (patternId: string) => void;
 }
 
-const PendingTacticsArea: React.FC<PendingTacticsAreaProps> = ({ patterns, onExonerated }) => {
+const PendingTacticsArea: React.FC<PendingTacticsAreaProps> = ({ 
+  patterns, 
+  userColor = '#64ffda',
+  otherColor = '#f07178',
+  onExonerated 
+}) => {
   if (patterns.length === 0) {
     return null;
   }
@@ -26,6 +33,7 @@ const PendingTacticsArea: React.FC<PendingTacticsAreaProps> = ({ patterns, onExo
           <PendingPattern
             key={pattern.id}
             pattern={pattern}
+            color={pattern.speaker === 'user' ? userColor : otherColor}
             onExonerated={onExonerated}
           />
         ))}
@@ -36,8 +44,9 @@ const PendingTacticsArea: React.FC<PendingTacticsAreaProps> = ({ patterns, onExo
 
 const PendingPattern: React.FC<{
   pattern: PendingPattern;
+  color: string;
   onExonerated?: (patternId: string) => void;
-}> = ({ pattern, onExonerated }) => {
+}> = ({ pattern, color, onExonerated }) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const smokeAnim = useRef(new Animated.Value(0)).current;
@@ -116,19 +125,21 @@ const PendingPattern: React.FC<{
         {
           opacity: fadeAnim,
           transform: [{ scale: scaleAnim }],
+          backgroundColor: `${color}40`,
+          borderColor: color,
         },
         pattern.status === 'exonerating' && styles.exoneratingCard,
       ]}
     >
       <View style={styles.patternContent}>
-        <View style={[styles.statusDot, pattern.status === 'tentative' && styles.tentativeDot]} />
-        <Text style={styles.patternType}>
+        <View style={[styles.statusDot, { backgroundColor: color }]} />
+        <Text style={[styles.patternType, { color }]}>
           {pattern.type.replace(/_/g, ' ')}
         </Text>
       </View>
 
       {pattern.status === 'tentative' && (
-        <Text style={styles.statusText}>Analyzing...</Text>
+        <Text style={[styles.statusText, { color }]}>Analyzing...</Text>
       )}
 
       {pattern.status === 'exonerating' && (
@@ -161,12 +172,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   patternCard: {
-    backgroundColor: '#f0717840',
     borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderWidth: 2,
-    borderColor: '#f07178',
   },
   exoneratingCard: {
     backgroundColor: '#64ffda20',
@@ -181,20 +190,14 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#ffaa00',
-  },
-  tentativeDot: {
-    backgroundColor: '#ffaa00',
   },
   patternType: {
     fontSize: 13,
-    color: '#f07178',
     fontWeight: '600',
     textTransform: 'capitalize',
   },
   statusText: {
     fontSize: 10,
-    color: '#ffaa00',
     marginTop: 2,
     textAlign: 'center',
   },

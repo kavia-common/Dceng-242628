@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
-import { View, StyleSheet, Animated, Text } from 'react-native';
+import { View, Text, StyleSheet, Animated, TouchableOpacity } from 'react-native';
 import Svg, { Circle, Ellipse, Path, Rect, Polygon } from 'react-native-svg';
+import { useRouter } from 'expo-router';
 
 interface AvatarProps {
   config: {
@@ -12,11 +13,14 @@ interface AvatarProps {
   animations: any[];
   confirmedPatterns?: any[];
   name: string;
+  sessionId?: string;
+  speaker?: string;
 }
 
-const Avatar: React.FC<AvatarProps> = ({ config, animations, confirmedPatterns = [], name }) => {
+const Avatar: React.FC<AvatarProps> = ({ config, animations, confirmedPatterns = [], name, sessionId, speaker }) => {
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(1)).current;
+  const router = useRouter();
 
   useEffect(() => {
     if (animations.length > 0) {
@@ -389,12 +393,18 @@ const Avatar: React.FC<AvatarProps> = ({ config, animations, confirmedPatterns =
     >
       {renderAvatar()}
       
-      {/* Pattern count badge - gamified */}
-      {confirmedPatterns.length > 0 && (
-        <View style={styles.patternCountBadge}>
+      {/* Pattern count badge - gamified and CLICKABLE */}
+      {confirmedPatterns.length > 0 && sessionId && (
+        <TouchableOpacity
+          style={styles.patternCountBadge}
+          onPress={() => router.push({
+            pathname: '/pattern-details',
+            params: { sessionId, speaker: speaker || 'user' }
+          })}
+        >
           <Text style={styles.patternCountText}>{confirmedPatterns.length}</Text>
           <Text style={styles.patternCountLabel}>patterns</Text>
-        </View>
+        </TouchableOpacity>
       )}
       
       {/* Pattern indicators below avatar - temporary flash */}
