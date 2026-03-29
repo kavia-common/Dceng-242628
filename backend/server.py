@@ -35,6 +35,7 @@ conversations_collection = db["conversations"]
 # Initialize AI services
 EMERGENT_KEY = os.getenv("EMERGENT_LLM_KEY")
 
+
 # Pydantic models
 class AvatarConfig(BaseModel):
     gender: str  # male, female, non-binary
@@ -42,11 +43,13 @@ class AvatarConfig(BaseModel):
     hairStyle: str
     facialFeature: str
 
+
 class ConversationMessage(BaseModel):
     speaker: str  # user or other
     text: str
     timestamp: str
     detectedPatterns: Optional[List[Dict]] = []
+
 
 class SessionCreate(BaseModel):
     userAvatar: AvatarConfig
@@ -54,10 +57,12 @@ class SessionCreate(BaseModel):
     userName: str
     otherName: str
 
+
 class AnalyzeRequest(BaseModel):
     sessionId: str
     speaker: str
     text: str
+
 
 class ReEvaluateRequest(BaseModel):
     sessionId: str
@@ -142,12 +147,12 @@ async def create_session(session_data: SessionCreate):
             "userName": session_data.userName,
             "otherName": session_data.otherName,
             "createdAt": datetime.utcnow().isoformat(),
-            "messages": []
+            "messages": [],
         }
         result = sessions_collection.insert_one(session)
         return {
             "sessionId": str(result.inserted_id),
-            "message": "Session created successfully"
+            "message": "Session created successfully",
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -159,12 +164,11 @@ async def get_session(session_id: str, include_messages: bool = False):
     try:
         projection = None if include_messages else {"messages": 0}
         session = sessions_collection.find_one(
-            {"_id": ObjectId(session_id)},
-            projection
+            {"_id": ObjectId(session_id)}, projection
         )
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        
+
         session["_id"] = str(session["_id"])
         return session
     except Exception as e:
@@ -180,24 +184,19 @@ async def transcribe_audio(file: UploadFile = File(...)):
             content = await file.read()
             temp_file.write(content)
             temp_file_path = temp_file.name
-        
+
         # Transcribe using OpenAI Whisper
         stt = OpenAISpeechToText(api_key=EMERGENT_KEY)
-        
+
         with open(temp_file_path, "rb") as audio_file:
             response = await stt.transcribe(
-                file=audio_file,
-                model="whisper-1",
-                response_format="json"
+                file=audio_file, model="whisper-1", response_format="json"
             )
-        
+
         # Clean up temp file
         os.unlink(temp_file_path)
-        
-        return {
-            "text": response.text,
-            "success": True
-        }
+
+        return {"text": response.text, "success": True}
     except Exception as e:
         print(f"Transcription error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -208,73 +207,78 @@ async def analyze_message(request: AnalyzeRequest):
     """Analyze message for communication patterns using Claude"""
     try:
         # Get recent conversation context (only needed fields)
-        recent_messages = list(conversations_collection.find(
-            {"sessionId": request.sessionId},
-            {"speaker": 1, "text": 1, "_id": 0}
-        ).sort("timestamp", -1).limit(5))
-        
+        recent_messages = list(
+            conversations_collection.find(
+                {"sessionId": request.sessionId}, {"speaker": 1, "text": 1, "_id": 0}
+            )
+            .sort("timestamp", -1)
+            .limit(5)
+        )
+
         # Build context string
         context = ""
         if recent_messages:
             context = "\n\nRecent conversation context:\n"
             for msg in reversed(recent_messages):
                 context += f"{msg['speaker']}: {msg['text']}\n"
-        
+
         # Initialize Claude
         chat = LlmChat(
             api_key=EMERGENT_KEY,
             session_id=f"analysis_{request.sessionId}",
-            system_message=SYSTEM_PROMPT
+            system_message=SYSTEM_PROMPT,
         ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-        
+
         # Create analysis message with context
         user_message = UserMessage(
-            text=f"{context}\n\nAnalyze this NEW message from {request.speaker}: \"{request.text}\"\n\nConsider the context above when determining if patterns are tentative or confirmed."
+            text=f'{context}\n\nAnalyze this NEW message from {request.speaker}: "{request.text}"\n\nConsider the context above when determining if patterns are tentative or confirmed.'
         )
-        
+
         # Get Claude's analysis
         response = await chat.send_message(user_message)
-        
+
         # Parse JSON response
         try:
             analysis = json.loads(response)
         except json.JSONDecodeError:
             # Try to extract JSON from response
             import re
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+
+            json_match = re.search(r"\{.*\}", response, re.DOTALL)
             if json_match:
                 analysis = json.loads(json_match.group())
             else:
                 analysis = {"patterns": []}
-        
+
         # Add pattern IDs and default status
         patterns = analysis.get("patterns", [])
         for pattern in patterns:
             pattern["id"] = str(ObjectId())
             if "status" not in pattern:
-                pattern["status"] = "tentative" if pattern.get("confidence", 0) < 0.8 else "confirmed"
-        
+                pattern["status"] = (
+                    "tentative" if pattern.get("confidence", 0) < 0.8 else "confirmed"
+                )
+
         # Save message to database
         message_data = {
             "sessionId": request.sessionId,
             "speaker": request.speaker,
             "text": request.text,
             "timestamp": datetime.utcnow().isoformat(),
-            "patterns": patterns
+            "patterns": patterns,
         }
         result = conversations_collection.insert_one(message_data)
         message_data["_id"] = str(result.inserted_id)
-        
+
         # Update session with new message
         sessions_collection.update_one(
-            {"_id": ObjectId(request.sessionId)},
-            {"$push": {"messages": message_data}}
+            {"_id": ObjectId(request.sessionId)}, {"$push": {"messages": message_data}}
         )
-        
+
         return {
             "patterns": patterns,
             "messageId": str(result.inserted_id),
-            "success": True
+            "success": True,
         }
     except Exception as e:
         print(f"Analysis error: {str(e)}")
@@ -286,21 +290,25 @@ async def reevaluate_patterns(request: ReEvaluateRequest):
     """Re-evaluate tentative patterns with additional conversation context"""
     try:
         # Get the message being re-evaluated
-        message = conversations_collection.find_one({"_id": ObjectId(request.messageId)})
+        message = conversations_collection.find_one(
+            {"_id": ObjectId(request.messageId)}
+        )
         if not message:
             raise HTTPException(status_code=404, detail="Message not found")
-        
+
         # Build full conversation context
         context = "Full conversation history:\n"
         for msg in request.conversationContext:
             context += f"{msg['speaker']}: {msg['text']}\n"
-        
+
         # Get tentative patterns from the message
-        tentative_patterns = [p for p in message.get("patterns", []) if p.get("status") == "tentative"]
-        
+        tentative_patterns = [
+            p for p in message.get("patterns", []) if p.get("status") == "tentative"
+        ]
+
         if not tentative_patterns:
             return {"updates": [], "success": True}
-        
+
         # Initialize Claude for re-evaluation
         reevaluate_prompt = """You are re-evaluating previously detected communication patterns with more conversation context.
 
@@ -318,68 +326,63 @@ Respond ONLY in valid JSON format:
     }
   ]
 }"""
-        
+
         chat = LlmChat(
             api_key=EMERGENT_KEY,
             session_id=f"reevaluate_{request.sessionId}",
-            system_message=reevaluate_prompt
+            system_message=reevaluate_prompt,
         ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-        
+
         # Create re-evaluation message
-        patterns_text = "\n".join([
-            f"- Pattern ID: {p['id']}, Type: {p['type']}, Evidence: {p.get('evidence', 'N/A')}"
-            for p in tentative_patterns
-        ])
-        
+        patterns_text = "\n".join(
+            [
+                f"- Pattern ID: {p['id']}, Type: {p['type']}, Evidence: {p.get('evidence', 'N/A')}"
+                for p in tentative_patterns
+            ]
+        )
+
         user_message = UserMessage(
             text=f"{context}\n\nRe-evaluate these TENTATIVE patterns:\n{patterns_text}"
         )
-        
+
         # Get Claude's re-evaluation
         response = await chat.send_message(user_message)
-        
+
         # Parse JSON response
         try:
             evaluation = json.loads(response)
         except json.JSONDecodeError:
             import re
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+
+            json_match = re.search(r"\{.*\}", response, re.DOTALL)
             if json_match:
                 evaluation = json.loads(json_match.group())
             else:
                 evaluation = {"evaluations": []}
-        
+
         # Update patterns in database
         updates = []
         for eval_item in evaluation.get("evaluations", []):
             pattern_id = eval_item.get("patternId")
             decision = eval_item.get("decision")
             reason = eval_item.get("reason", "")
-            
+
             # Update the pattern status in the message
             conversations_collection.update_one(
-                {
-                    "_id": ObjectId(request.messageId),
-                    "patterns.id": pattern_id
-                },
+                {"_id": ObjectId(request.messageId), "patterns.id": pattern_id},
                 {
                     "$set": {
                         "patterns.$.status": decision,
-                        "patterns.$.reevaluationReason": reason
+                        "patterns.$.reevaluationReason": reason,
                     }
-                }
+                },
             )
-            
-            updates.append({
-                "patternId": pattern_id,
-                "decision": decision,
-                "reason": reason
-            })
-        
-        return {
-            "updates": updates,
-            "success": True
-        }
+
+            updates.append(
+                {"patternId": pattern_id, "decision": decision, "reason": reason}
+            )
+
+        return {"updates": updates, "success": True}
     except Exception as e:
         print(f"Re-evaluation error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -390,26 +393,27 @@ async def get_messages(session_id: str, limit: int = 100, skip: int = 0):
     """Get messages for a session with pagination"""
     try:
         # Optimized query with projection
-        messages = list(conversations_collection.find(
-            {"sessionId": session_id},
-            {"speaker": 1, "text": 1, "timestamp": 1, "patterns": 1}
-        ).sort("timestamp", 1).skip(skip).limit(limit))
-        
+        messages = list(
+            conversations_collection.find(
+                {"sessionId": session_id},
+                {"speaker": 1, "text": 1, "timestamp": 1, "patterns": 1},
+            )
+            .sort("timestamp", 1)
+            .skip(skip)
+            .limit(limit)
+        )
+
         for msg in messages:
             msg["_id"] = str(msg["_id"])
-        
+
         total = conversations_collection.count_documents({"sessionId": session_id})
-        
-        return {
-            "messages": messages,
-            "total": total,
-            "limit": limit,
-            "skip": skip
-        }
+
+        return {"messages": messages, "total": total, "limit": limit, "skip": skip}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8001)
