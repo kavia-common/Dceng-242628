@@ -137,10 +137,14 @@ async def create_session(session_data: SessionCreate):
 
 
 @app.get("/api/session/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, include_messages: bool = False):
     """Get session data"""
     try:
-        session = sessions_collection.find_one({"_id": ObjectId(session_id)})
+        projection = None if include_messages else {"messages": 0}
+        session = sessions_collection.find_one(
+            {"_id": ObjectId(session_id)},
+            projection
+        )
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         
@@ -239,17 +243,24 @@ async def analyze_message(request: AnalyzeRequest):
 
 
 @app.get("/api/session/{session_id}/messages")
-async def get_messages(session_id: str):
-    """Get all messages for a session"""
+async def get_messages(session_id: str, limit: int = 100, skip: int = 0):
+    """Get messages for a session with pagination"""
     try:
         messages = list(conversations_collection.find(
             {"sessionId": session_id}
-        ).sort("timestamp", 1))
+        ).sort("timestamp", 1).skip(skip).limit(limit))
         
         for msg in messages:
             msg["_id"] = str(msg["_id"])
         
-        return {"messages": messages}
+        total = conversations_collection.count_documents({"sessionId": session_id})
+        
+        return {
+            "messages": messages,
+            "total": total,
+            "limit": limit,
+            "skip": skip
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
