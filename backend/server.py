@@ -206,9 +206,10 @@ async def transcribe_audio(file: UploadFile = File(...)):
 async def analyze_message(request: AnalyzeRequest):
     """Analyze message for communication patterns using Claude"""
     try:
-        # Get recent conversation context
+        # Get recent conversation context (only needed fields)
         recent_messages = list(conversations_collection.find(
-            {"sessionId": request.sessionId}
+            {"sessionId": request.sessionId},
+            {"speaker": 1, "text": 1, "_id": 0}
         ).sort("timestamp", -1).limit(5))
         
         # Build context string
@@ -387,8 +388,10 @@ Respond ONLY in valid JSON format:
 async def get_messages(session_id: str, limit: int = 100, skip: int = 0):
     """Get messages for a session with pagination"""
     try:
+        # Optimized query with projection
         messages = list(conversations_collection.find(
-            {"sessionId": session_id}
+            {"sessionId": session_id},
+            {"speaker": 1, "text": 1, "timestamp": 1, "patterns": 1}
         ).sort("timestamp", 1).skip(skip).limit(limit))
         
         for msg in messages:
