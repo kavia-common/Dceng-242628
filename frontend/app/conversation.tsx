@@ -9,6 +9,9 @@ import {
   ActivityIndicator,
   Platform,
   Alert,
+  TextInput,
+  Keyboard,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Audio } from 'expo-av';
@@ -32,6 +35,9 @@ export default function ConversationScreen() {
   const [currentSpeaker, setCurrentSpeaker] = useState<'user' | 'other'>('user');
   const [userAnimations, setUserAnimations] = useState<any[]>([]);
   const [otherAnimations, setOtherAnimations] = useState<any[]>([]);
+  const [textInput, setTextInput] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [inputMode, setInputMode] = useState<'voice' | 'text'>('voice');
   
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -124,7 +130,18 @@ export default function ConversationScreen() {
       );
 
       const text = transcribeResponse.data.text;
+      await analyzeAndAddMessage(text);
 
+    } catch (error) {
+      console.error('Error transcribing/analyzing:', error);
+      Alert.alert('Error', 'Failed to process audio');
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  const analyzeAndAddMessage = async (text: string) => {
+    try {
       // Analyze message for patterns
       const analyzeResponse = await axios.post(`${BACKEND_URL}/api/analyze`, {
         sessionId,
@@ -165,10 +182,27 @@ export default function ConversationScreen() {
       }, 100);
 
     } catch (error) {
-      console.error('Error transcribing/analyzing:', error);
-      Alert.alert('Error', 'Failed to process audio');
+      console.error('Error analyzing message:', error);
+      throw error;
+    }
+  };
+
+  const handleTextSubmit = async () => {
+    if (!textInput.trim()) {
+      Alert.alert('Empty Message', 'Please enter a message');
+      return;
+    }
+
+    setIsProcessing(true);
+    
+    try {
+      await analyzeAndAddMessage(textInput.trim());
+      setTextInput('');
+      Keyboard.dismiss();
+    } catch (error) {
+      Alert.alert('Error', 'Failed to process message');
     } finally {
-      setIsTranscribing(false);
+      setIsProcessing(false);
     }
   };
 
@@ -186,14 +220,18 @@ export default function ConversationScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="#64ffda" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Discourse Engine</Text>
-        <View style={{ width: 24 }} />
-      </View>
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.flex}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()}>
+            <Ionicons name="arrow-back" size={24} color="#64ffda" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Discourse Engine</Text>
+          <View style={{ width: 24 }} />
+        </View>
 
       {/* Avatars */}
       <View style={styles.avatarsContainer}>
@@ -273,24 +311,86 @@ export default function ConversationScreen() {
           </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.recordButton, isRecording && styles.recordingButton]}
-          onPress={isRecording ? stopRecording : startRecording}
-          disabled={isTranscribing}
-        >
-          {isRecording ? (
-            <>
-              <View style={styles.recordingDot} />
-              <Text style={styles.recordButtonText}>Stop Recording</Text>
-            </>
-          ) : (
-            <>
-              <Ionicons name="mic" size={24} color="#0a192f" />
-              <Text style={styles.recordButtonText}>Press to Speak</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        {/* Input Mode Toggle */}
+        <View style={styles.inputModeToggle}>
+          <TouchableOpacity
+            style={[styles.modeButton, inputMode === 'voice' && styles.modeButtonActive]}
+            onPress={() => setInputMode('voice')}
+          >
+            <Ionicons 
+              name="mic" 
+              size={20} 
+              color={inputMode === 'voice' ? '#0a192f' : '#64ffda'} 
+            />
+            <Text style={[styles.modeButtonText, inputMode === 'voice' && styles.modeButtonTextActive]}>
+              Voice
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[styles.modeButton, inputMode === 'text' && styles.modeButtonActive]}
+            onPress={() => setInputMode('text')}
+          >
+            <Ionicons 
+              name="text" 
+              size={20} 
+              color={inputMode === 'text' ? '#0a192f' : '#64ffda'} 
+            />
+            <Text style={[styles.modeButtonText, inputMode === 'text' && styles.modeButtonTextActive]}>
+              Text
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Voice Input */}
+        {inputMode === 'voice' && (
+          <TouchableOpacity
+            style={[styles.recordButton, isRecording && styles.recordingButton]}
+            onPress={isRecording ? stopRecording : startRecording}
+            disabled={isTranscribing}
+          >
+            {isRecording ? (
+              <>
+                <View style={styles.recordingDot} />
+                <Text style={styles.recordButtonText}>Stop Recording</Text>
+              </>
+            ) : (
+              <>
+                <Ionicons name="mic" size={24} color="#0a192f" />
+                <Text style={styles.recordButtonText}>Press to Speak</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
+
+        {/* Text Input */}
+        {inputMode === 'text' && (
+          <View style={styles.textInputContainer}>
+            <TextInput
+              style={styles.textInput}
+              value={textInput}
+              onChangeText={setTextInput}
+              placeholder="Type your message..."
+              placeholderTextColor="#8892b0"
+              multiline
+              maxLength={500}
+              editable={!isProcessing}
+            />
+            <TouchableOpacity
+              style={[styles.sendButton, (!textInput.trim() || isProcessing) && styles.sendButtonDisabled]}
+              onPress={handleTextSubmit}
+              disabled={!textInput.trim() || isProcessing}
+            >
+              {isProcessing ? (
+                <ActivityIndicator size="small" color="#0a192f" />
+              ) : (
+                <Ionicons name="send" size={24} color="#0a192f" />
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -299,6 +399,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0a0e27',
+  },
+  flex: {
+    flex: 1,
   },
   loadingContainer: {
     flex: 1,
@@ -446,5 +549,60 @@ const styles = StyleSheet.create({
     height: 12,
     borderRadius: 6,
     backgroundColor: '#ffffff',
+  },
+  inputModeToggle: {
+    flexDirection: 'row',
+    backgroundColor: '#1d2d50',
+    borderRadius: 8,
+    padding: 4,
+    marginBottom: 12,
+    gap: 4,
+  },
+  modeButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    borderRadius: 6,
+  },
+  modeButtonActive: {
+    backgroundColor: '#64ffda',
+  },
+  modeButtonText: {
+    color: '#64ffda',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modeButtonTextActive: {
+    color: '#0a192f',
+  },
+  textInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 12,
+  },
+  textInput: {
+    flex: 1,
+    backgroundColor: '#1d2d50',
+    borderRadius: 12,
+    padding: 14,
+    paddingTop: 14,
+    color: '#ccd6f6',
+    fontSize: 16,
+    maxHeight: 120,
+    minHeight: 48,
+  },
+  sendButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#64ffda',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendButtonDisabled: {
+    opacity: 0.5,
   },
 });
