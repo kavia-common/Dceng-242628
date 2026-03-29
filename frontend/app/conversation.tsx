@@ -13,7 +13,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Audio } from 'expo-av';
 import axios from 'axios';
 import Constants from 'expo-constants';
@@ -50,6 +50,57 @@ export default function ConversationScreen() {
     loadSession();
     requestAudioPermission();
   }, []);
+
+  // Reload data when screen comes back into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      if (session) {
+        reloadSessionData();
+      }
+    }, [sessionId])
+  );
+
+  const reloadSessionData = async () => {
+    try {
+      const response = await axios.get(`${BACKEND_URL}/api/session/${sessionId}`);
+      const sessionData = response.data;
+      
+      // Restore messages
+      setMessages(sessionData.messages || []);
+      
+      // Rebuild confirmed patterns for each speaker
+      const userPatterns: any[] = [];
+      const otherPatterns: any[] = [];
+      const pending: any[] = [];
+      
+      (sessionData.messages || []).forEach((msg: any) => {
+        if (msg.patterns) {
+          msg.patterns.forEach((pattern: any) => {
+            if (pattern.status === 'confirmed') {
+              if (msg.speaker === 'user') {
+                userPatterns.push(pattern);
+              } else {
+                otherPatterns.push(pattern);
+              }
+            } else if (pattern.status === 'tentative') {
+              pending.push({
+                ...pattern,
+                speaker: msg.speaker,
+                messageId: msg._id,
+              });
+            }
+          });
+        }
+      });
+      
+      setUserConfirmedPatterns(userPatterns);
+      setOtherConfirmedPatterns(otherPatterns);
+      setPendingPatterns(pending);
+      
+    } catch (error) {
+      console.error('Error reloading session:', error);
+    }
+  };
 
   const requestAudioPermission = async () => {
     try {
