@@ -58,9 +58,21 @@ class AnalyzeRequest(BaseModel):
     speaker: str
     text: str
 
+class ReEvaluateRequest(BaseModel):
+    sessionId: str
+    messageId: str
+    conversationContext: List[Dict]
 
-# Defense mechanisms detection prompt
+
+# Defense mechanisms detection prompt for initial analysis
 SYSTEM_PROMPT = """You are an expert psychologist analyzing conversation patterns. Detect manipulative, toxic, or abusive communication tactics, as well as healthy boundaries.
+
+IMPORTANT: You will analyze messages in TWO PHASES:
+1. TENTATIVE detection - when you first see a potential pattern
+2. CONFIRMATION or EXONERATION - after seeing more conversation context
+
+For initial messages, mark patterns as "tentative" if you're not 100% certain.
+For follow-up analysis with context, determine if the pattern should be "confirmed" or "exonerated".
 
 Analyze the given message and identify ANY of these patterns:
 
@@ -102,10 +114,14 @@ Respond ONLY in valid JSON format:
     {
       "type": "pattern_name",
       "confidence": 0.0-1.0,
-      "evidence": "specific quote or behavior"
+      "evidence": "specific quote or behavior",
+      "status": "tentative" or "confirmed"
     }
   ]
 }
+
+Mark status as "tentative" if confidence < 0.8 or if more context is needed.
+Mark status as "confirmed" if confidence >= 0.8 and pattern is clear.
 
 If no patterns detected, return: {"patterns": []}"""
 
@@ -190,6 +206,18 @@ async def transcribe_audio(file: UploadFile = File(...)):
 async def analyze_message(request: AnalyzeRequest):
     """Analyze message for communication patterns using Claude"""
     try:
+        # Get recent conversation context
+        recent_messages = list(conversations_collection.find(
+            {"sessionId": request.sessionId}
+        ).sort("timestamp", -1).limit(5))
+        
+        # Build context string
+        context = ""
+        if recent_messages:
+            context = "\n\nRecent conversation context:\n"
+            for msg in reversed(recent_messages):
+                context += f"{msg['speaker']}: {msg['text']}\n"
+        
         # Initialize Claude
         chat = LlmChat(
             api_key=EMERGENT_KEY,
@@ -197,9 +225,9 @@ async def analyze_message(request: AnalyzeRequest):
             system_message=SYSTEM_PROMPT
         ).with_model("anthropic", "claude-sonnet-4-5-20250929")
         
-        # Create analysis message
+        # Create analysis message with context
         user_message = UserMessage(
-            text=f"Analyze this message from {request.speaker}: \"{request.text}\""
+            text=f"{context}\n\nAnalyze this NEW message from {request.speaker}: \"{request.text}\"\n\nConsider the context above when determining if patterns are tentative or confirmed."
         )
         
         # Get Claude's analysis
@@ -217,15 +245,23 @@ async def analyze_message(request: AnalyzeRequest):
             else:
                 analysis = {"patterns": []}
         
+        # Add pattern IDs and default status
+        patterns = analysis.get("patterns", [])
+        for pattern in patterns:
+            pattern["id"] = str(ObjectId())
+            if "status" not in pattern:
+                pattern["status"] = "tentative" if pattern.get("confidence", 0) < 0.8 else "confirmed"
+        
         # Save message to database
         message_data = {
             "sessionId": request.sessionId,
             "speaker": request.speaker,
             "text": request.text,
             "timestamp": datetime.utcnow().isoformat(),
-            "patterns": analysis.get("patterns", [])
+            "patterns": patterns
         }
-        conversations_collection.insert_one(message_data)
+        result = conversations_collection.insert_one(message_data)
+        message_data["_id"] = str(result.inserted_id)
         
         # Update session with new message
         sessions_collection.update_one(
@@ -234,11 +270,116 @@ async def analyze_message(request: AnalyzeRequest):
         )
         
         return {
-            "patterns": analysis.get("patterns", []),
+            "patterns": patterns,
+            "messageId": str(result.inserted_id),
             "success": True
         }
     except Exception as e:
         print(f"Analysis error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/reevaluate")
+async def reevaluate_patterns(request: ReEvaluateRequest):
+    """Re-evaluate tentative patterns with additional conversation context"""
+    try:
+        # Get the message being re-evaluated
+        message = conversations_collection.find_one({"_id": ObjectId(request.messageId)})
+        if not message:
+            raise HTTPException(status_code=404, detail="Message not found")
+        
+        # Build full conversation context
+        context = "Full conversation history:\n"
+        for msg in request.conversationContext:
+            context += f"{msg['speaker']}: {msg['text']}\n"
+        
+        # Get tentative patterns from the message
+        tentative_patterns = [p for p in message.get("patterns", []) if p.get("status") == "tentative"]
+        
+        if not tentative_patterns:
+            return {"updates": [], "success": True}
+        
+        # Initialize Claude for re-evaluation
+        reevaluate_prompt = """You are re-evaluating previously detected communication patterns with more conversation context.
+
+For each pattern, determine if it should be:
+1. CONFIRMED - The pattern is clearly present with the additional context
+2. EXONERATED - The additional context shows this was NOT the harmful pattern initially suspected
+
+Respond ONLY in valid JSON format:
+{
+  "evaluations": [
+    {
+      "patternId": "pattern_id",
+      "decision": "confirmed" or "exonerated",
+      "reason": "brief explanation why"
+    }
+  ]
+}"""
+        
+        chat = LlmChat(
+            api_key=EMERGENT_KEY,
+            session_id=f"reevaluate_{request.sessionId}",
+            system_message=reevaluate_prompt
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        
+        # Create re-evaluation message
+        patterns_text = "\n".join([
+            f"- Pattern ID: {p['id']}, Type: {p['type']}, Evidence: {p.get('evidence', 'N/A')}"
+            for p in tentative_patterns
+        ])
+        
+        user_message = UserMessage(
+            text=f"{context}\n\nRe-evaluate these TENTATIVE patterns:\n{patterns_text}"
+        )
+        
+        # Get Claude's re-evaluation
+        response = await chat.send_message(user_message)
+        
+        # Parse JSON response
+        try:
+            evaluation = json.loads(response)
+        except json.JSONDecodeError:
+            import re
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                evaluation = json.loads(json_match.group())
+            else:
+                evaluation = {"evaluations": []}
+        
+        # Update patterns in database
+        updates = []
+        for eval_item in evaluation.get("evaluations", []):
+            pattern_id = eval_item.get("patternId")
+            decision = eval_item.get("decision")
+            reason = eval_item.get("reason", "")
+            
+            # Update the pattern status in the message
+            conversations_collection.update_one(
+                {
+                    "_id": ObjectId(request.messageId),
+                    "patterns.id": pattern_id
+                },
+                {
+                    "$set": {
+                        "patterns.$.status": decision,
+                        "patterns.$.reevaluationReason": reason
+                    }
+                }
+            )
+            
+            updates.append({
+                "patternId": pattern_id,
+                "decision": decision,
+                "reason": reason
+            })
+        
+        return {
+            "updates": updates,
+            "success": True
+        }
+    except Exception as e:
+        print(f"Re-evaluation error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
