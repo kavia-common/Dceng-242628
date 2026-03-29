@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, SafeAreaView } fr
 import { useRouter } from 'expo-router';
 import axios from 'axios';
 import Constants from 'expo-constants';
+import { Ionicons } from '@expo/vector-icons';
 
 const BACKEND_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || process.env.EXPO_PUBLIC_BACKEND_URL;
 
@@ -152,6 +153,7 @@ export default function SetupScreen() {
         </View>
 
         <TouchableOpacity style={styles.startButton} onPress={createSession}>
+          <Ionicons name="play-circle" size={24} color="#0a192f" />
           <Text style={styles.startButtonText}>Start Conversation</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -228,7 +230,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#64ffda',
     borderRadius: 12,
     padding: 18,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
     marginTop: 20,
     marginBottom: 40,
   },
