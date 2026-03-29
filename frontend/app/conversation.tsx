@@ -51,13 +51,13 @@ export default function ConversationScreen() {
     requestAudioPermission();
   }, []);
 
-  // Reload data when screen comes back into focus
+  // Reload data when screen comes back into focus (e.g. after navigating to analysis and back).
+  // This must NOT be gated on `session`, otherwise the callback can close over `session === null`
+  // and skip rehydrating patterns, causing tactic badges to "disappear" on return.
   useFocusEffect(
     React.useCallback(() => {
-      if (session) {
-        reloadSessionData();
-      }
-    }, [sessionId])
+      reloadSessionData();
+    }, [sessionId, session])
   );
 
   const reloadSessionData = async () => {
