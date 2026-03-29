@@ -21,13 +21,14 @@ import Avatar from '../components/Avatar';
 import DefenseMechanismAnimation from '../components/DefenseMechanismAnimation';
 import PendingTacticsArea from '../components/PendingTacticsArea';
 import { Ionicons } from '@expo/vector-icons';
+import { getTacticsSnapshot, setTacticsSnapshot } from '../components/sessionTacticsStore';
 
 const BACKEND_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || process.env.EXPO_PUBLIC_BACKEND_URL;
 
 export default function ConversationScreen() {
   const { sessionId } = useLocalSearchParams();
   const router = useRouter();
-  
+
   const [session, setSession] = useState<any>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
@@ -43,60 +44,74 @@ export default function ConversationScreen() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [inputMode, setInputMode] = useState<'voice' | 'text'>('voice');
   const [messagesSinceLastEval, setMessagesSinceLastEval] = useState(0);
-  
+
   const scrollViewRef = useRef<ScrollView>(null);
+
+  const rebuildDerivedPatterns = (msgs: any[]) => {
+    const userPatterns: any[] = [];
+    const otherPatterns: any[] = [];
+    const pending: any[] = [];
+
+    (msgs || []).forEach((msg: any) => {
+      if (!msg?.patterns) return;
+
+      msg.patterns.forEach((pattern: any) => {
+        if (pattern.status === 'confirmed') {
+          if (msg.speaker === 'user') userPatterns.push(pattern);
+          else otherPatterns.push(pattern);
+        } else if (pattern.status === 'tentative') {
+          pending.push({
+            ...pattern,
+            speaker: msg.speaker,
+            messageId: msg._id,
+          });
+        }
+      });
+    });
+
+    setUserConfirmedPatterns(userPatterns);
+    setOtherConfirmedPatterns(otherPatterns);
+    setPendingPatterns(pending);
+
+    // Persist snapshot for smooth navigation back to this screen.
+    if (typeof sessionId === 'string') {
+      setTacticsSnapshot(sessionId, {
+        userConfirmedPatterns: userPatterns,
+        otherConfirmedPatterns: otherPatterns,
+        pendingPatterns: pending,
+      });
+    }
+  };
 
   useEffect(() => {
     loadSession();
     requestAudioPermission();
   }, []);
 
-  // Reload data when screen comes back into focus (e.g. after navigating to analysis and back).
-  // This must NOT be gated on `session`, otherwise the callback can close over `session === null`
-  // and skip rehydrating patterns, causing tactic badges to "disappear" on return.
+  // Rehydrate immediately from in-memory store on focus, then revalidate from server.
   useFocusEffect(
     React.useCallback(() => {
+      if (typeof sessionId === 'string') {
+        const snapshot = getTacticsSnapshot(sessionId);
+        if (snapshot) {
+          setUserConfirmedPatterns(snapshot.userConfirmedPatterns || []);
+          setOtherConfirmedPatterns(snapshot.otherConfirmedPatterns || []);
+          setPendingPatterns(snapshot.pendingPatterns || []);
+        }
+      }
+
       reloadSessionData();
-    }, [sessionId, session])
+    }, [sessionId])
   );
 
   const reloadSessionData = async () => {
     try {
       const response = await axios.get(`${BACKEND_URL}/api/session/${sessionId}`);
       const sessionData = response.data;
-      
-      // Restore messages
+
+      setSession(sessionData);
       setMessages(sessionData.messages || []);
-      
-      // Rebuild confirmed patterns for each speaker
-      const userPatterns: any[] = [];
-      const otherPatterns: any[] = [];
-      const pending: any[] = [];
-      
-      (sessionData.messages || []).forEach((msg: any) => {
-        if (msg.patterns) {
-          msg.patterns.forEach((pattern: any) => {
-            if (pattern.status === 'confirmed') {
-              if (msg.speaker === 'user') {
-                userPatterns.push(pattern);
-              } else {
-                otherPatterns.push(pattern);
-              }
-            } else if (pattern.status === 'tentative') {
-              pending.push({
-                ...pattern,
-                speaker: msg.speaker,
-                messageId: msg._id,
-              });
-            }
-          });
-        }
-      });
-      
-      setUserConfirmedPatterns(userPatterns);
-      setOtherConfirmedPatterns(otherPatterns);
-      setPendingPatterns(pending);
-      
+      rebuildDerivedPatterns(sessionData.messages || []);
     } catch (error) {
       console.error('Error reloading session:', error);
     }
@@ -118,6 +133,9 @@ export default function ConversationScreen() {
       const response = await axios.get(`${BACKEND_URL}/api/session/${sessionId}`);
       setSession(response.data);
       setMessages(response.data.messages || []);
+
+      // Critical: also rebuild derived pattern state on initial load/mount.
+      rebuildDerivedPatterns(response.data.messages || []);
     } catch (error) {
       console.error('Error loading session:', error);
       Alert.alert('Error', 'Failed to load session');
